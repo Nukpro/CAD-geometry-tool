@@ -1,7 +1,7 @@
 ;;;-----------------------------------------------------------------------------
 ;;; Developer:   Nikita Prokhor
-;;; Version:     1.5
-;;; Date:        2025-06-12
+;;; Version:     1.6
+;;; Date:        2025-10-06
 ;;;
 ;;; Commands:
 ;;;   TA-SETELEVATIONFORPOLYLINE - Sets elevation for polylines based on text inside them
