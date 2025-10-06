@@ -1,6 +1,6 @@
 ;;;-----------------------------------------------------------------------------
 ;;; Developer:   Nikita Prokhor
-;;; Version:     1.6
+;;; Version:     1.7
 ;;; Date:        2025-10-06
 ;;;
 ;;; Commands:
@@ -11,6 +11,7 @@
 ;;;   TA-MULTY-POLYLINE-OFFSET - Creates offset polylines with automatic selection of correct offset direction
 ;;;   TA-ADD-PREFIX-SUFFIX-TO-TEXT - Adds a prefix or suffix to selected text objects
 ;;;   TA-PONITS-AT-POLY-ANGLES - Creates points at polyline vertices by angle range, with optional start/end points
+;;;   TA-3dPOLY-BY-POINTS-BLOCKS - Creates 3D polylines from selected points and blocks
 ;;; 
 ;;;
 ;;; Usage:
@@ -75,6 +76,16 @@
 ;;;       - Angle association is applied to the pivot vertex (middle of each triplet)
 ;;;       - Start/end node points are created only when explicitly confirmed
 ;;;       - Results list omits duplicate coordinates after the start node
+;;;
+;;;   TA-3dPOLY-BY-POINTS-BLOCKS
+;;;     1. Run command and choose to Keep or Delete original objects (Keep by default)
+;;;     2. Select points and/or block references (INSERT entities)
+;;;     3. Command extracts coordinates from selected objects:
+;;;        - For points: uses point coordinates
+;;;        - For blocks: uses block insertion points
+;;;     4. Sorts points based on bounding box dimensions (wider than tall = sort by X, else by Y)
+;;;     5. Creates a 3D polyline connecting all sorted points
+;;;     6. Optionally deletes original objects if Delete option was chosen
 ;;;-----------------------------------------------------------------------------
 
 ;;;-----------------------------------------------------------------------------
@@ -641,6 +652,40 @@
         ;; Not a supported polyline type
         (princ "Unexpected error: not poly and not 3d poly")
       )
+    )
+  )
+)
+
+;;;-----------------------------------------------------------------------------
+;;; Bounding box calculation for a list of point lists
+;;; Input: points-list = ((x y [z]) (x y [z]) ...)
+;;; Output: (minX minY maxX maxY) or nil if input invalid/empty
+;;;-----------------------------------------------------------------------------
+(defun get-bbox (points-list / min-x min-y max-x max-y pt x y i)
+  (cond
+    ((or (null points-list) (not (listp points-list)))
+     nil)
+    (T
+     (setq min-x 1e99
+           min-y 1e99
+           max-x -1e99
+           max-y -1e99)
+     (foreach pt points-list
+       (if (and (listp pt) (>= (length pt) 2))
+         (progn
+           (setq x (car pt))
+           (setq y (cadr pt))
+           (if (< x min-x) (setq min-x x))
+           (if (< y min-y) (setq min-y y))
+           (if (> x max-x) (setq max-x x))
+           (if (> y max-y) (setq max-y y))
+         )
+       )
+     )
+     (if (or (= min-x 1e99) (= min-y 1e99) (= max-x -1e99) (= max-y -1e99))
+       nil
+       (list min-x min-y max-x max-y)
+     )
     )
   )
 )
@@ -1296,10 +1341,6 @@
       )
     )
   )
-  (princ "\nResult list: ")
-  (print results-list)
-  (print "Ponits processing: ")
-  (print)
   
   ;|
   (
@@ -1405,4 +1446,92 @@
   (princ)
 )
 
+(defun c:TA-3dPOLY-BY-POINTS-BLOCKS (/ polyline i deleteOriginalObjects ent vlaObj pt pointList)
+  (initget "Keep Delete")
+  (setq deleteOriginalObjects (getkword "\nKeep or delete original points and blocks: [Keep/Delete] <Keep>: "))
+  (if (null deleteOriginalObjects) (setq deleteOriginalObjects "Keep"))
+  
+  (princ "\nSelect blocks and/or points: ")
+  ;; Select only POINT and INSERT (block reference) entities
+  (setq initObjects (ssget '((0 . "POINT,INSERT"))))
+  
+  ;; Get a list of insertion points (as (x y z) lists) from selected POINT and INSERT entities
+  (setq pointList '())
+  (if initObjects
+    (progn
+      (setq i 0)
+      (while (< i (sslength initObjects))
+        (setq ent (ssname initObjects i))
+        (setq vlaObj (vlax-ename->vla-object ent))
+        (cond
+          ;; For POINT entities
+          ((= (vla-get-ObjectName vlaObj) "AcDbPoint")
+           (setq pt (vlax-safearray->list (vlax-variant-value (vla-get-Coordinates vlaObj))))
+           (if (>= (length pt) 3)
+             (setq pointList (cons (list (nth 0 pt) (nth 1 pt) (nth 2 pt)) pointList))
+           )
+          )
+          ;; For INSERT (block reference) entities
+          ((= (vla-get-ObjectName vlaObj) "AcDbBlockReference")
+           (setq insPt (vlax-safearray->list (vlax-variant-value (vla-get-InsertionPoint vlaObj))))
+           (if (>= (length insPt) 3)
+             (setq pointList (cons (list (nth 0 insPt) (nth 1 insPt) (nth 2 insPt)) pointList))
+           )
+          )
+        )
+        (setq i (1+ i))
+      )
+      (setq pointList (reverse pointList))
+    )
+  )
+  
+  (print pointList)
+  
+  (setq bbox(get-bbox pointList))
+
+  ;; Sort points depending on bbox dimensions (mimics the Python snippet above)
+  (if bbox
+    (if (> (- (nth 2 bbox) (nth 0 bbox)) (- (nth 3 bbox) (nth 1 bbox)))
+      ;; Wider than tall: sort by X
+      (setq pointList
+            (vl-sort pointList
+              (function (lambda (a b) (< (car a) (car b))))))
+      ;; Taller (or equal): sort by Y
+      (setq pointList
+            (vl-sort pointList
+              (function (lambda (a b) (< (cadr a) (cadr b))))))
+    )
+  )
+    
+  ;; Create a 3D polyline from the sorted pointList
+  (if (and pointList (> (length pointList) 1))
+    (progn
+      (setq plData (list '(0 . "POLYLINE")
+                         '(100 . "AcDbEntity")
+                         '(100 . "AcDb3dPolyline")
+                         '(66 . 1)
+                         '(70 . 8))) ; 8 = 3D polyline
+      (entmake plData)
+      (setq plEnt (entlast))
+      (foreach pt pointList
+        (entmake (list
+                   '(0 . "VERTEX")
+                   '(100 . "AcDbEntity")
+                   '(100 . "AcDbVertex")
+                   '(100 . "AcDb3dPolylineVertex")
+                   (cons 10 pt)
+                   '(70 . 32) ; 32 = 3D polyline vertex
+                 ))
+      )
+      (entmake '((0 . "SEQEND")))
+      (princ "\n3D Polyline created from selected points.")
+    )
+    (princ "\nNot enough points to create a 3D polyline.")
+  )
+  (if (equal deleteOriginalObjects "Delete")
+    (command "_.ERASE" initObjects "")
+  )
+
+
+)
 
