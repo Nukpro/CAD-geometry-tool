@@ -1,21 +1,22 @@
 ;;;-----------------------------------------------------------------------------
 ;;; Developer:   Nikita Prokhor
-;;; Version:     1.7
+;;; Version:     1.8
 ;;; Date:        2025-10-06
 ;;;
 ;;; Commands:
-;;;   TA-SETELEVATIONFORPOLYLINE - Sets elevation for polylines based on text inside them
-;;;   TA-POINTSFROMMLEADERS     - Creates points from MLeader vertices with elevation values
-;;;   TA-CONVER-BROKEN-LEADER   - Creates points from broken leaders with elevation values from nearest text
+;;;   TA-SET-ELEV-FOR-PADS     - Sets elevation for polylines based on text inside them
+;;;   TA-POINTS-FROM-MLEADERS  - Creates points from MLeader vertices with elevation values
+;;;   TA-CONVER-BROKEN-LEADER  - Creates points from broken leaders with elevation values from nearest text
 ;;;   TA-SCALE-LIST-RESET      - Resets and configures the scale list with either Metric or Imperial scales
 ;;;   TA-MULTY-POLYLINE-OFFSET - Creates offset polylines with automatic selection of correct offset direction
 ;;;   TA-ADD-PREFIX-SUFFIX-TO-TEXT - Adds a prefix or suffix to selected text objects
-;;;   TA-PONITS-AT-POLY-ANGLES - Creates points at polyline vertices by angle range, with optional start/end points
+;;;   TA-POINTS-AT-POLY-ANGLES - Creates points at polyline vertices by angle range, with optional start/end points
 ;;;   TA-3dPOLY-BY-POINTS-BLOCKS - Creates 3D polylines from selected points and blocks
+;;;   TA-EXP-SLOPE             - Exports slope lines to GeoJSON format for external processing
 ;;; 
 ;;;
 ;;; Usage:
-;;;   TA-SETELEVATIONFORPOLYLINE
+;;;   TA-SET-ELEV-FOR-PADS
 ;;;     1. Run command and select polylines and text objects in one selection set
 ;;;     2. Script finds text inside each polyline. If multiple texts exist inside a polyline,
 ;;;        only the first one is processed. Avoid having multiple text objects inside a polyline.
@@ -25,7 +26,7 @@
 ;;;        - "-TA-pline-to-elev-processed" (Green) for successfully processed polylines
 ;;;        - "-TA-pline-to-elev-failed" (Red) for polylines with errors
 ;;;
-;;;   TA-POINTSFROMMLEADERS
+;;;   TA-POINTS-FROM-MLEADERS
 ;;;     1. Run command and select MLeaders containing elevation values
 ;;;     2. Script extracts elevation value from text content (e.g. "23.5", "FG=23.5", "23,5", "23.5\PFG")
 ;;;     3. Creates points at MLeader vertex locations
@@ -65,7 +66,7 @@
 ;;;     4. Command modifies all selected text objects by adding the string either at the beginning or end
 ;;;     5. Works with both regular text (TEXT) and multiline text (MTEXT) objects
 ;;;
-;;;   TA-PONITS-AT-POLY-ANGLES
+;;;   TA-POINTS-AT-POLY-ANGLES
 ;;;     1. Run command and input angle range in degrees (defaults to 5–135)
 ;;;     2. Optionally choose to create points at start and end nodes (Yes/No)
 ;;;     3. Select one or more polylines (supports LWPOLYLINE, POLYLINE, 3DPOLYLINE)
@@ -86,6 +87,14 @@
 ;;;     4. Sorts points based on bounding box dimensions (wider than tall = sort by X, else by Y)
 ;;;     5. Creates a 3D polyline connecting all sorted points
 ;;;     6. Optionally deletes original objects if Delete option was chosen
+;;;
+;;;   TA-EXP-SLOPE
+;;;     1. Run command and select lines, polylines, or 3D polylines representing slopes
+;;;     2. Command extracts coordinates from all selected slope lines
+;;;     3. Creates individual line segments from polyline vertices
+;;;     4. Exports data to GeoJSON format in the current drawing folder
+;;;     5. Output file: slopes-input_local_CRS.geojson
+;;;     6. Each line segment gets a unique slopeId for external processing
 ;;;-----------------------------------------------------------------------------
 
 ;;;-----------------------------------------------------------------------------
@@ -650,7 +659,24 @@
           (reverse lcl-vert-coords)
         )
         ;; Not a supported polyline type
-        (princ "Unexpected error: not poly and not 3d poly")
+        (progn 
+          (if 
+            (eq (vla-get-ObjectName polyline) "AcDbLine")
+            (progn
+            ;; For AcDbLine, return a list of its start and end point coordinates as ((x1 y1 z1) (x2 y2 z2))
+            (progn
+              (setq startPt (vlax-get-property polyline 'StartPoint))
+              (setq endPt   (vlax-get-property polyline 'EndPoint))
+              (list
+                (vlax-safearray->list (vlax-variant-value startPt))
+                (vlax-safearray->list (vlax-variant-value endPt))
+              )
+            )
+            )
+            (princ "Unexpected error: not poly and not 3d poly")
+          )
+          
+        )
       )
     )
   )
@@ -754,7 +780,7 @@
 ;;; Main Commands
 ;;;-----------------------------------------------------------------------------
 
-(defun c:TA-SETELEVATIONFORPOLYLINE ( / ss obj-list i)
+(defun c:TA-SET-ELEV-FOR-PADS ( / ss obj-list i)
   (vl-load-com)
   ;; Create required layers
   (create-layers-with-colors TA-LAYERS)
@@ -870,7 +896,7 @@
   (princ)
 )
 
-(defun c:TA-POINTSFROMMLEADERS (/ i)
+(defun c:TA-POINTS-FROM-MLEADERS (/ i)
   (vl-load-com) ;; Load ActiveX support
   ;; Create required layers
   (create-layers-with-colors TA-LAYERS)
@@ -1294,7 +1320,7 @@
   (princ)
 )
 
-(defun c:TA-PONITS-AT-POLY-ANGLES (/ polyline results-list i)
+(defun c:TA-POINTS-AT-POLY-ANGLES (/ polyline results-list i)
   ;; Prompt user to enter an angle range (from 1 to 179 degrees), default is 5 to 135
   (defun get-angle-range (/ min-angle max-angle user-input i)
     (princ "\nEnter minimum angle in degrees [1-179] <5>: ")
@@ -1533,5 +1559,124 @@
   )
 
 
+)
+
+(defun c:TA-EXP-SLOPE(/ slopeLines coordList pathToCurrCadFolder pathToResultJSON ent i finalLineList slopeId finalSorted)
+  
+  (princ "\nSelect lines of slopes to be exported: ")
+  (setq slopeLines (ssget '((0 . "LWPOLYLINE,POLYLINE,LINE,3DPOLYLINE"))))
+  
+  (setq pathToCurrCadFolder (getvar "DWGPREFIX"))
+  (setq pathToResultJSON (strcat pathToCurrCadFolder "slopes-input_local_CRS.geojson"))
+  
+  (setq coordList '())
+  
+  (if slopeLines
+    (progn
+      (setq i 0)
+      (repeat (sslength slopeLines)
+        (setq ent (ssname slopeLines i))
+        (setq ent (vlax-ename->vla-object ent))
+        (setq coords (get-list-of-polyline-vert-coords ent))
+        (if coords
+          (setq coordList (cons coords coordList))
+        )
+        (setq i (1+ i))
+      )
+      (setq coordList (reverse coordList))
+    )
+  )
+  
+  (print coordList)
+
+  
+  (setq finalLineList '())
+  ;; coordList template (((2642.08 7638.89 0.0) (2710.87 7587.62 150.0)) ((2456.23 7580.58 0.0) (2494.67 7618.5 0.0) (2533.1 7580.58 0.0)))
+  (setq i 0)
+  (setq slopeId 0)
+    
+  (foreach polyLine coordList
+    (setq j 0)
+    (while (< j (- (length polyLine) 1))
+      (setq curLine '())
+      (setq curLine (cons (nth j polyLine) curLine))
+      (setq curLine (cons (nth (+ j 1) polyLine) curLine))
+      (setq curLine (cons slopeId curLine))
+      (setq finalLineList (cons curLine finalLineList))
+      (setq j (+ j 1))
+      (setq slopeId (+ slopeId 1))
+      
+    )
+ 
+  )
+  (princ "\nFinalList: ")
+  
+  ;|
+    (
+      (5 (2533.1 7580.58 0.0) (2494.67 7618.5 0.0))
+      (4 (2494.67 7618.5 0.0) (2456.23 7580.58 0.0))
+      (3 (2710.87 7587.62 150.0) (2642.08 7638.89 0.0))
+      (2 (2688.4 7407.99 300.0) (2626.81 7322.74 200.0))
+      (1 (2626.81 7322.74 200.0) (2588.41 7334.66 200.0))
+      (0 (2588.41 7334.66 200.0) (2582.33 7391.28 100.0))
+    )|;
+  
+  ;; geojson template:
+  ;; res_dict = {"type": "FeatureCollection", "name": "slopes-input", "crs": None, "features": []}
+  ;; feature template:
+  ;| { "type": "Feature", 
+     "properties": { "elevationsTargetM": null, "padId": null, "slopeId": (iterable)), "slopeTarget": nul }, 
+     "geometry": { "type": "LineString", "coordinates": [ [ 875249.77, 1113911.30 ], [ 875291.47, 1113804.12 ] ] } }
+  |;
+  
+  
+  
+  (print finalLineList)
+  (princ)
+  
+ 
+  ;; Build GeoJSON FeatureCollection and write to file
+  ;; Sort features by slopeId to ensure predictable order
+  (setq finalSorted
+    (if finalLineList
+      (vl-sort finalLineList (function (lambda (a b) (< (car a) (car b)))))
+    )
+  )
+
+  (setq f (open pathToResultJSON "w"))
+  (if f
+    (progn
+      (write-line "{ \"type\": \"FeatureCollection\", \"name\": \"slopes-input\", \"crs\": null, \"features\": [" f)
+      (setq firstFeature T)
+      (foreach item finalSorted
+        (setq slopeId (car item))
+        (setq p1 (cadr item))
+        (setq p2 (caddr item))
+        ;; Extract XY only; format numbers
+        (setq x1 (rtos (car p1) 2 TA-POINT-PRECISION))
+        (setq y1 (rtos (cadr p1) 2 TA-POINT-PRECISION))
+        (setq x2 (rtos (car p2) 2 TA-POINT-PRECISION))
+        (setq y2 (rtos (cadr p2) 2 TA-POINT-PRECISION))
+
+        (if firstFeature
+          (setq firstFeature nil)
+          (write-line "," f)
+        )
+
+        (write-line
+          (strcat
+            "{ \"type\": \"Feature\", \"properties\": { \"elevationsTargetM\": null, \"padId\": null, \"slopeId\": " (itoa slopeId) ", \"slopeTarget\": null }, "
+            "\"geometry\": { \"type\": \"LineString\", \"coordinates\": [[ " x1 ", " y1 " ], [ " x2 ", " y2 " ]] } }"
+          )
+          f
+        )
+      )
+      (write-line "]}" f)
+      (close f)
+      (princ (strcat "\nGeoJSON saved to: " pathToResultJSON))
+    )
+    (princ "\nError opening result file for writing.")
+  )
+ 
 )
 
