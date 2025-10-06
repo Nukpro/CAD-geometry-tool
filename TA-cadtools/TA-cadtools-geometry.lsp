@@ -10,6 +10,7 @@
 ;;;   TA-SCALE-LIST-RESET      - Resets and configures the scale list with either Metric or Imperial scales
 ;;;   TA-MULTY-POLYLINE-OFFSET - Creates offset polylines with automatic selection of correct offset direction
 ;;;   TA-ADD-PREFIX-SUFFIX-TO-TEXT - Adds a prefix or suffix to selected text objects
+;;;   TA-PONITS-AT-POLY-ANGLES - Creates points at polyline vertices by angle range, with optional start/end points
 ;;; 
 ;;;
 ;;; Usage:
@@ -63,6 +64,17 @@
 ;;;     4. Command modifies all selected text objects by adding the string either at the beginning or end
 ;;;     5. Works with both regular text (TEXT) and multiline text (MTEXT) objects
 ;;;
+;;;   TA-PONITS-AT-POLY-ANGLES
+;;;     1. Run command and input angle range in degrees (defaults to 5–135)
+;;;     2. Optionally choose to create points at start and end nodes (Yes/No)
+;;;     3. Select one or more polylines (supports LWPOLYLINE, POLYLINE, 3DPOLYLINE)
+;;;     4. Command computes interior angles per vertex and creates points where angle ∈ [min,max]
+;;;     5. If enabled, adds points at start and end nodes as well
+;;;     6. Outputs total number of created points
+;;;     Notes:
+;;;       - Angle association is applied to the pivot vertex (middle of each triplet)
+;;;       - Start/end node points are created only when explicitly confirmed
+;;;       - Results list omits duplicate coordinates after the start node
 ;;;-----------------------------------------------------------------------------
 
 ;;;-----------------------------------------------------------------------------
@@ -97,7 +109,7 @@
 ;;; Layer Management Functions
 ;;;-----------------------------------------------------------------------------
 
-(defun create-layers-with-colors (layer-list / doc layers created-layers)
+(defun create-layers-with-colors (layer-list / doc layers created-layers i)
   (vl-load-com)
   (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
   (setq layers (vla-get-Layers doc))
@@ -132,7 +144,7 @@
 ;;; Object Filtering Functions
 ;;;-----------------------------------------------------------------------------
 
-(defun filter-objects-by-type (obj-list type-list / filtered-list obj obj-type)
+(defun filter-objects-by-type (obj-list type-list / filtered-list obj obj-type i)
   (setq filtered-list
     (vl-remove-if-not
       (function
@@ -152,11 +164,43 @@
   filtered-list
 )
 
+
+(defun IsPolyline (ent / vla objname dxf0 i)
+  (cond
+    ((null ent) nil)
+    ((= (type ent) 'VLA-OBJECT)
+     (setq vla ent))
+    ((= (type ent) 'ENAME)
+     (setq vla (vlax-ename->vla-object ent)))
+    (T (setq vla nil))
+  )
+  (if vla
+    (progn
+      (setq objname (vla-get-ObjectName vla))
+      (or (= objname "AcDbPolyline")
+          (= objname "AcDb2dPolyline")
+          (= objname "AcDb3dPolyline"))
+    )
+    (if (= (type ent) 'ENAME)
+      (progn
+        ;; Fallback to DXF 0 if VLA conversion failed
+        (setq dxf0 (cdr (assoc 0 (entget ent))))
+        (if (null dxf0)
+          nil
+          (member dxf0 '("LWPOLYLINE" "POLYLINE"))
+        )
+      )
+      nil
+    )
+  )
+)
+  
+
 ;;;-----------------------------------------------------------------------------
 ;;; Text Processing Functions
 ;;;-----------------------------------------------------------------------------
 
-(defun get-text-insertion-point (txt-obj / result)
+(defun get-text-insertion-point (txt-obj / result i)
   (setq result (vl-catch-all-apply 
     (function
       (lambda ()
@@ -189,7 +233,7 @@
   )
 )
 
-(defun get-text-contents (txt-obj / result)
+(defun get-text-contents (txt-obj / result i)
   (setq result (vl-catch-all-apply
     (function 
       (lambda ()
@@ -303,7 +347,7 @@
   )
 )
 
-(defun close-polyline (polyline / closed-state)
+(defun close-polyline (polyline / closed-state i)
   ;; Get the closed state of the polyline
   (setq closed-state (vl-catch-all-apply 
     (function 
@@ -329,7 +373,7 @@
   )
 )
 
-(defun filter-invalid-polylines (polyline-list error-layer / filtered-list)
+(defun filter-invalid-polylines (polyline-list error-layer / filtered-list i)
   ;; Initialize filtered list
   (setq filtered-list '())
 
@@ -400,7 +444,7 @@
   found-intersection
 )
 
-(defun set-polyline-elevation (polyline elevation / )
+(defun set-polyline-elevation (polyline elevation / i)
   (vl-catch-all-apply
     (function
       (lambda ()
@@ -417,7 +461,7 @@
   )
 )
 
-(defun AddLeaderToMLeader (vlaMLeader)
+(defun AddLeaderToMLeader (vlaMLeader / i)
   (vl-load-com) ;; Load ActiveX support
 
   ;; Add a new leader
@@ -463,7 +507,7 @@
   main-list
 )
 
-(defun find-nearest-text-elevation (end-point main-list / min-dist nearest-text)
+(defun find-nearest-text-elevation (end-point main-list / min-dist nearest-text i)
   (setq min-dist 1e99
         nearest-text nil)
   
@@ -487,6 +531,177 @@
   (if nearest-text
       (parse-text-for-elevation nearest-text)
       -100
+  )
+)
+
+;;;-----------------------------------------------------------------------------
+;;; Processing of polyline list for verticies and coordinates
+;;;-----------------------------------------------------------------------------
+
+(defun calculate-flat-angle-between-points (pt1 pt2 pt3 / ang ang1 ang2 i)
+  ;; (princ "\nStart calc flat angle: \n")
+  
+  ;; Calculate scalar vector production: BA · BC = (x1 - x2)(x3 - x2) + (y1 - y2)(y3 - y2)
+  (setq scalarVecProd 
+        (+
+          (* 
+            (- (car pt1) (car pt2))
+            (- (car pt3) (car pt2))
+          )
+          (*
+            (- (cadr pt1) (cadr pt2))
+            (- (cadr pt3) (cadr pt2))
+          )
+        )  
+  )
+  
+  ;; Calculate module vector: |BA| = sqrt((x1 - x2)² + (y1 - y2)²); |BC| = sqrt((x3 - x2)² + (y3 - y2)²)
+  (defun calc-moduleVec (lcl-pt1 lcl-pt2 / moduleVec i)
+      (setq moduleVec
+            (sqrt 
+              (+
+                (expt (- (car lcl-pt1) (car lcl-pt2)) 2) ;(x1 - x2)²
+                (expt (- (cadr lcl-pt1) (cadr lcl-pt2)) 2) ;(y1 - y2)²
+              )
+            )
+      )
+
+  )
+  
+  (setq moduleVec1 (calc-moduleVec pt1 pt2))
+  (setq moduleVec2 (calc-moduleVec pt2 pt3))
+  (setq den (* moduleVec1 moduleVec2))
+  
+  ;; Safely compute cosAng, guarding against zero-length vectors and rounding
+  (setq cosAng
+          (if (equal den 0.0 1e-12)
+            1.0
+            (/ scalarVecProd den)
+          )
+        
+  )
+  
+
+  ;; (print (rtos cosAng 2 8))
+  ;; acos using two-argument atan for correct quadrant handling: acos(x) = atan2(√(1-x²), x)
+  (defun acos (lcl-cosAng / i)
+    (atan
+      (sqrt (- 1 (* lcl-cosAng lcl-cosAng)))
+      lcl-cosAng
+    )
+  )
+  ;; check if cosAng = 0; angRad = pi/2
+  ;; check if cosAng 
+  (setq angRad (acos cosAng))
+  (setq angDeg (* angRad (/ 180 pi)))    
+  
+)
+
+(defun get-list-of-polyline-vert-coords (polyline / coords i lcl-vert-coords x y)
+  (vl-load-com)
+
+  (if (or (eq (vla-get-ObjectName polyline) "AcDb2dPolyline")
+          (eq (vla-get-ObjectName polyline) "AcDbPolyline")
+      )
+    ;; Handle 2D polylines and lightweight polylines
+    (progn
+      ;; (princ "poly or 2d poly processing \n")
+      ;; Get coordinates as a flat list: (x1 y1 x2 y2 ...)
+      (setq coords (vlax-safearray->list (vlax-variant-value (vla-get-Coordinates polyline))))
+      (setq i 0)
+      (setq lcl-vert-coords '())
+      (setq z (vla-get-Elevation polyline))
+      ;; Iterate through coordinate pairs and build (x y z) lists
+      (while (< i (length coords))
+        (setq x (nth i coords))
+        (setq y (nth (1+ i) coords))
+        (setq lcl-vert-coords (cons (list x y z) lcl-vert-coords))
+        (setq i (+ i 2))
+      )
+      (reverse lcl-vert-coords)
+    )
+    ;; Handle 3D polylines
+    (progn
+      (if (eq (vla-get-ObjectName polyline) "AcDb3dPolyline")
+        (progn
+          ;; Get coordinates as a flat list: (x1 y1 z1 x2 y2 z2 ...)
+          (setq coords (vlax-safearray->list (vlax-variant-value (vla-get-Coordinates polyline))))
+          ;; (princ (strcat "\n3d poly coords: " (vl-princ-to-string coords)))
+          (setq i 0)
+          (setq lcl-vert-coords '())
+          (while (< i (length coords))
+            (setq x (nth i coords))
+            (setq y (nth (1+ i) coords))
+            (setq z (nth (+ i 2) coords))
+            (setq lcl-vert-coords (cons (list x y z) lcl-vert-coords))
+            (setq i (+ i 3))
+          )
+          (reverse lcl-vert-coords)
+        )
+        ;; Not a supported polyline type
+        (princ "Unexpected error: not poly and not 3d poly")
+      )
+    )
+  )
+)
+
+(defun get-polyline-verticies-angles ( insert-poly / polyline i)
+  
+  ;; Gets polyline  
+  
+  (cond
+    ;; If caller provided an entity and it is a polyline, use it
+    ((and insert-poly (IsPolyline insert-poly))
+     (setq polyline insert-poly))
+    ;; If caller provided a non-polyline (e.g., LINE), skip gracefully
+    ((and insert-poly (not (IsPolyline insert-poly)))
+     (setq polyline nil))
+    ;; If nothing provided, prompt the user
+    (T
+     (princ "\nSelect polyline: ")
+     (setq ss (ssget '((0 . "POLYLINE,LWPOLYLINE"))))
+     (if (not ss) (progn (princ "\nNo polyline selected.") (exit)))
+     (setq polyline (ssname ss 0))
+    )
+  )
+  ;; If nothing valid to process, return nil silently
+  (if (null polyline)
+    nil
+    (progn
+	  (setq polyline (vlax-ename->vla-object polyline))
+      (setq vert-coords (get-list-of-polyline-vert-coords polyline))
+      (setq i 0)
+
+      ;; (print "Start angle calculation")
+      
+      (setq vert-coords-ang '())
+      (setq start-point (list (car vert-coords) "start_node"))
+      (setq end-point (list (nth (- (length vert-coords) 1) vert-coords) "end_node"))
+      (setq vect-corods-ang (list start-point))
+
+      
+      (if (> (length vert-coords) 2)
+        (progn
+          (setq i 1)
+          (while (< i (- (length vert-coords) 1))
+            (setq pt1 (nth (- i 1) vert-coords))
+            (setq pt2 (nth i vert-coords))
+            (setq pt3 (nth (+ i 1) vert-coords))
+            (setq ang (calculate-flat-angle-between-points pt1 pt2 pt3))
+            ;; Associate the angle with the current pivot vertex (pt2), not the previous (pt1)
+            (setq tmp (list pt2 ang))
+            (print tmp)
+            (setq vect-corods-ang (cons tmp vect-corods-ang))
+            (setq i (+ i 1))
+          )
+        )
+        (print "Two vertecies")
+      )
+      
+      (setq vect-corods-ang (cons end-point vect-corods-ang))
+      (setq vect-corods-ang (reverse vect-corods-ang))
+      vect-corods-ang
+    )
   )
 )
 
@@ -610,7 +825,7 @@
   (princ)
 )
 
-(defun c:TA-POINTSFROMMLEADERS ()
+(defun c:TA-POINTSFROMMLEADERS (/ i)
   (vl-load-com) ;; Load ActiveX support
   ;; Create required layers
   (create-layers-with-colors TA-LAYERS)
@@ -812,7 +1027,7 @@
   (princ)
 )
 
-(defun c:TA-SCALE-LIST-RESET (/ unit_choice)
+(defun c:TA-SCALE-LIST-RESET (/ unit_choice i)
   ;; Initialize keywords for dropdown selection
   (initget "Metric Imperial")
   (setq unit_choice (getkword "\nChoose unit system [Metric/Imperial] <Metric>: "))
@@ -1030,6 +1245,162 @@
       (princ "\nText modification completed.")
     )
     (princ "\nNo text objects selected.")
+  )
+  (princ)
+)
+
+(defun c:TA-PONITS-AT-POLY-ANGLES (/ polyline results-list i)
+  ;; Prompt user to enter an angle range (from 1 to 179 degrees), default is 5 to 135
+  (defun get-angle-range (/ min-angle max-angle user-input i)
+    (princ "\nEnter minimum angle in degrees [1-179] <5>: ")
+    (setq user-input (getint))
+    (if (or (null user-input) (< user-input 1) (> user-input 179))
+      (setq min-angle 5)
+      (setq min-angle user-input)
+    )
+    (princ (strcat "\nEnter maximum angle in degrees [" (itoa (1+ min-angle)) "-179] <135>: "))
+    (setq user-input (getint))
+    (if (or (null user-input) (<= user-input min-angle) (> user-input 179))
+      (setq max-angle 135)
+      (setq max-angle user-input)
+    )
+    (list min-angle max-angle)
+  )
+  (setq angle-range (get-angle-range))
+  
+  ;; Ask user if they want to create points at the start and end of the polyline
+  (initget "Yes No")
+  (setq addStartEnd (getkword "\nCreate points at start and end of polyline? [Yes/No] <No>: "))
+  (if (null addStartEnd) (setq addStartEnd "No"))
+  
+  (princ "\nSelect polylines, lines, or 3D polylines: ")
+  (setq polyline (ssget '((0 . "LWPOLYLINE,POLYLINE,LINE,3DPOLYLINE"))))
+  (setq results-list '())
+
+  (if polyline
+    (progn
+      (setq i 0)
+      (print "Strat repeat")
+      (repeat (sslength polyline)
+        (print i)
+        (setq ent (ssname polyline i))
+        (if (IsPolyline ent)
+          (progn
+            (print "Is polyline")
+            (setq res (get-polyline-verticies-angles ent))
+            (if res (setq results-list (cons res results-list)))
+          )
+          (print "Not a poly")
+        )
+        (setq i (1+ i))
+      )
+    )
+  )
+  (princ "\nResult list: ")
+  (print results-list)
+  (print "Ponits processing: ")
+  (print)
+  
+  ;|
+  (
+   (
+      ((2419.91 7405.36 0.0) "start_node") 
+      ((2419.91 7405.36 0.0) 88.542) 
+      ((2530.47 7470.61 0.0) 166.84) 
+      ((2590.48 7362.74 0.0) 78.1015) 
+      ((2688.4 7407.99 0.0) "end_node")
+    ) 
+   (
+      ((2603.12 7503.23 0.0) "start_node") 
+      ((2603.12 7503.23 0.0) 73.108) 
+      ((2664.71 7555.85 0.0) 63.4341) 
+      ((2750.0 7562.69 0.0) "end_node")
+    )
+  )
+  |;
+  
+  
+  ;; Iterate over results-list and add points at vertices for angle entries
+  (if results-list
+    (progn
+      (setq created-count 0)
+      (foreach poly-results results-list
+        (foreach item poly-results
+          ;; Expected item formats:
+          ;;  - ((x y z) "start_node") or ((x y z) "end_node")
+          ;;  - ((x y z) angle)
+          
+          ;; If user chose to add points at start and end nodes, create them
+          (if (and 
+                (or (equal addStartEnd "Yes") (equal addStartEnd "yes"))
+                (or (equal (cadr item) "start_node") (equal (cadr item) "end_node"))
+              )
+            (progn
+              (setq vtx (car item))
+              (if (= (length vtx) 2)
+                (setq vtx (append vtx (list 0.0)))
+              )
+              (if (= (length vtx) 3)
+                (progn
+                  (entmake (list
+                            '(0 . "POINT")
+                            '(100 . "AcDbEntity")
+                            '(100 . "AcDbPoint")
+                            (cons 10 vtx)
+                          )
+                  )
+                  (setq created-count (1+ created-count))
+                  (print (strcat "Start/End node point created at: " (vl-princ-to-string vtx)))
+                )
+                (print "Start/End node point not created (invalid vertex)")
+              )
+            )
+          )
+          
+          
+          ;; processing intermediate points
+          (if (numberp (cadr item))
+            (progn              
+              (print "cheked as number, processing")
+              (setq ang(cadr item))
+              (print ang)
+              
+              (if 
+                  (and
+                    (>= ang (car angle-range))
+                    (<= ang (cadr angle-range))
+                  )
+                  (progn
+                    (print "angle is in range")
+                    (setq vtx (car item))
+                    (if (= (length vtx) 2)
+                      (setq vtx (append vtx (list 0.0)))
+                    )
+                    (print vtx)
+                    (if (= (length vtx) 3)
+                      (progn
+                        (entmake (list
+                                  '(0 . "POINT")
+                                  '(100 . "AcDbEntity")
+                                  '(100 . "AcDbPoint")
+                                  (cons 10 vtx)
+                                )
+                        )
+                        (setq created-count (1+ created-count))
+                      )
+                    )
+                  )
+               )
+              
+            )
+
+          )
+
+          
+        )
+      )
+      (princ (strcat "\nCreated points at corners: " (itoa created-count)))
+    )
   )
   (princ)
 )
