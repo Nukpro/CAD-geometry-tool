@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage SchemaVersion="1.0"
+                    AutodeskProduct="AutoCAD"
+                    Name="TA-Tools"
+                    Description="TraceAir CAD team tools for request processing using AutoCAD"
+                    AppVersion="1.0.0"
+                    ProductType="Application"
+                    HelpFile=" "
+                    HelpFileRus=" "
+                    Author="Nikita Prokhor"
+                    ProductCode="{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
+                    UpgradeCode="{B2C3D4E5-F6G7-8901-BCDE-F23456789012}"
+                    Icon="./Contents/Resources/ico/1-TA-SET-ELEV-FOR-PADS.png">
+  <CompanyDetails Name="TraceAir"
+                  Phone=" "
+                  Url="https://traceair.net"
+                  Email=" " />
+  <Components Description="TA-Tools CUI">
+    <RuntimeRequirements OS="Win32|Win64" Platform="AutoCAD*" SeriesMin="R18.2" />
+    <ComponentEntry
+        AppName="TA-Tools CUI"
+        Version="1.0.0"
+        ModuleName="./Contents/Runtime/tatools.cuix"
+        AppDescription="TA-Tools custom user interface"
+        LoadOnAutoCADStartup="True"
+        LoadOnCommandInvocation="False"
+        LoadOnAppearance="False" />
+  </Components>
+  <Components Description="TA-Tools LISP Files">
+    <RuntimeRequirements OS="Win32|Win64" Platform="AutoCAD*" SeriesMin="R18.2" />
+    <ComponentEntry
+        AppName="TA-Tools Geometry"
+        Version="1.0.0"
+        ModuleName="./Contents/Runtime/TA-cadtools-geometry.lsp"
+        AppDescription="Main geometry tools for TA-Tools"
+        LoadOnAutoCADStartup="True"
+        LoadOnCommandInvocation="False"
+        PerDocument="False">
+      <LispFunctions>
+        <LispFunction>TA-SET-ELEV-FOR-PADS</LispFunction>
+        <LispFunction>TA-POINTS-FROM-MLEADERS</LispFunction>
+        <LispFunction>TA-CONVER-BROKEN-LEADER</LispFunction>
+        <LispFunction>TA-SCALE-LIST-RESET</LispFunction>
+        <LispFunction>TA-MULTY-POLYLINE-OFFSET</LispFunction>
+        <LispFunction>TA-ADD-PREFIX-SUFFIX-TO-TEXT</LispFunction>
+        <LispFunction>TA-POINTS-AT-POLY-ANGLES</LispFunction>
+        <LispFunction>TA-3dPOLY-BY-POINTS-BLOCKS</LispFunction>
+        <LispFunction>TA-EXP-SLOPE</LispFunction>
+      </LispFunctions>
+    </ComponentEntry>
+  </Components>
+</ApplicationPackage>

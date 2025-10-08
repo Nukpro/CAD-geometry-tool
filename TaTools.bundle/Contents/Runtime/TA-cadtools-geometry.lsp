@@ -1,17 +1,21 @@
 ;;;-----------------------------------------------------------------------------
 ;;; Developer:   Nikita Prokhor
-;;; Version:     1.8
-;;; Date:        2025-10-06
+;;; Version:     1.9
+;;; Date:        2025-10-08
 ;;;
 ;;; Commands:
+;;;   
+;;;  Polyline processing
 ;;;   TA-SET-ELEV-FOR-PADS     - Sets elevation for polylines based on text inside them
+;;;   TA-MULTY-POLYLINE-OFFSET - Creates offset for multiple polylines with automatic selection of correct offset direction
+;;;   TA-POINTS-AT-POLY-ANGLES - Creates points at polyline vertices by angle range, with optional start/end points
+;;;   TA-3dPOLY-BY-POINTS-BLOCKS - Creates 3D polylines from selected points and block references, automatically sorting coordinates for optimal connection order
+;;;  Leaders and text processing
 ;;;   TA-POINTS-FROM-MLEADERS  - Creates points from MLeader vertices with elevation values
 ;;;   TA-CONVER-BROKEN-LEADER  - Creates points from broken leaders with elevation values from nearest text
-;;;   TA-SCALE-LIST-RESET      - Resets and configures the scale list with either Metric or Imperial scales
-;;;   TA-MULTY-POLYLINE-OFFSET - Creates offset polylines with automatic selection of correct offset direction
 ;;;   TA-ADD-PREFIX-SUFFIX-TO-TEXT - Adds a prefix or suffix to selected text objects
-;;;   TA-POINTS-AT-POLY-ANGLES - Creates points at polyline vertices by angle range, with optional start/end points
-;;;   TA-3dPOLY-BY-POINTS-BLOCKS - Creates 3D polylines from selected points and blocks
+;;;  Settings and export
+;;;   TA-SCALE-LIST-RESET      - Resets and configures the scale list with either Metric or Imperial scales
 ;;;   TA-EXP-SLOPE             - Exports slope lines to GeoJSON format for external processing
 ;;; 
 ;;;
