@@ -1,0 +1,4 @@
+%PROGRAMFILES%\Autodesk\ApplicationPlugins
+
+https://help.autodesk.com/view/ACDLT/2024/RUS/?guid=GUID-5E50A846-C80B-4FFD-8DD3-C20B22098008
+
